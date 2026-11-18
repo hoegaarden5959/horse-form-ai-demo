@@ -1,0 +1,57 @@
+name: Validate Android demo
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check HTML and JavaScript
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          import re
+          page = Path("index.html").read_text(encoding="utf-8")
+          assert "<html" in page and "</html>" in page
+          assert "id=\"file\"" in page
+          assert "id=\"extract\"" in page
+          assert "id=\"downloadAll\"" in page
+          assert "id=\"suggest\"" in page
+          assert "これはAI診断ではありません" in page
+          scripts = re.findall(r"<script(?:\\s[^>]*)?>(.*?)</script>", page, flags=re.S)
+          assert len(scripts) == 1, "Expected one inline script"
+          Path("/tmp/horse-demo.js").write_text(scripts[0], encoding="utf-8")
+          class Check(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.ids = set()
+              def handle_starttag(self, tag, attrs):
+                  for key, value in attrs:
+                      if key == "id":
+                          assert value not in self.ids, f"Duplicate id: {value}"
+                          self.ids.add(value)
+          checker = Check()
+          checker.feed(page)
+          print("HTML structure and required controls verified")
+          PY
+          node --check /tmp/horse-demo.js
+      - name: Verify ZIP export implementation and client-only handling
+        run: |
+          node - <<'JS'
+          const fs = require('fs'), vm = require('vm'), assert = require('assert');
+          const script = fs.readFileSync('/tmp/horse-demo.js', 'utf8');
+          const crc = script.match(/function crc32\(bytes\)\{.*?\}function zipBytes/s);
+          assert(crc, 'ZIP CRC implementation not found');
+          assert(script.includes("application/zip"), 'ZIP MIME type missing');
+          assert(script.includes("URL.createObjectURL(zip)"), 'Client-side ZIP creation missing');
+          assert(!/https?:\/\//.test(script), 'Unexpected external URL in client script');
+          console.log('ZIP export and client-only assertions passed');
+          JS
